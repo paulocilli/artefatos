@@ -1,0 +1,68 @@
+name: Pipeline de Build, Scan e Publicacao
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-scan-publish:
+    name: Build, Scan de CVEs e Push no Registro
+    runs-on: ubuntu-latest
+
+    steps:
+      # Passo 1: Pega o código do repositório
+      - name: Baixar codigo-fonte
+        uses: actions/checkout@v4
+
+      # Passo 2: Define as tags (versao semantica e hash do commit)
+      - name: Extrair metadados e tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=v1.0.0
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
+
+      # Passo 3: Prepara o construtor Docker
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Passo 4: Autentica automaticamente no GitHub Packages (sem senha externa)
+      - name: Autenticar no Registro de Artefatos (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Passo 5: Faz o Build da imagem localmente
+      - name: Executar Docker Build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+      # Passo 6: Varredura de Seguranca (Scan de CVEs com Trivy)
+      - name: Scanner de Vulnerabilidades (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ github.repository }}:latest
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      # Passo 7: Envia as camadas e publica no GitHub Packages (Docker Push)
+      - name: Publicar Imagem no GitHub Packages (Docker Push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
